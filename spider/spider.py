@@ -23,8 +23,9 @@ class VideoSpider() :
 		self.interval=int(parser.get("crawler", "interval"))
 		self.interval_on_error=int(parser.get("crawler", "interval_on_error"))
 		self.retries=int(parser.get("crawler","retries"))
-		self.root_data_path=parser.get("data", "save_path")
-		self.debug=bool(parser.get("crawler","debug"))
+		self.root_data_path=parser.get("data", "root_path")
+		self.debug= True if parser.get("crawler","debug")==1 else False
+		print self.debug
 
 	def get_by_curl(self, url , save=None):
 		if self.debug:
@@ -120,7 +121,7 @@ class TvplaySpider(VideoSpider)	:
 		self.pattern_iqiyi=re.compile(r"data-drama-vid=\"(.*?)\"")
 		self.pattern_sohu=re.compile(r"vid=\"(\d+)\"")
 		self.pattern_pptv=re.compile(r"pid/(\d*?).js")				
-		self.pattern_wasn=re.compile(r"<embed src=\"http://play.wasu.cn/(.*?).swf\"")
+		self.pattern_wasu=re.compile(r"<embed src=\"http://play.wasu.cn/(.*?).swf\"")
 
 		#read record file 	
 		if os.path.exists(self.record_file):
@@ -223,8 +224,11 @@ class TvplaySpider(VideoSpider)	:
 		
 
 	def get_play_site(self, id, playurls):
+		#{19061_2_youku:''}
+		playparam = dict()
 		for playsite in playurls:
 			episodes=playsite["episodes"]
+			site_epi = dict()
 			for episode in episodes:
 				title=episode["single_title"]
 				url=episode["url"]
@@ -232,49 +236,54 @@ class TvplaySpider(VideoSpider)	:
 				isplay=episode["is_play"]
 				siteorder=episode["site_order"]
 				siteurl=episode["site_url"]
+				swf = ""
 				if siteurl=="youku.com":	
 					#http://v.youku.com/v_show/id_XNTcxODIzNTEy.html
-					key = siteurl[-18:-5]
+					swf = "http://player.youku.com/player.php/sid/%s/v.swf" % url[-18:-5]
 				elif siteurl=="tudou.com":
 					#http://www.tudou.com/albumplay/iZ6TjiWzLbU/FVZFKAzJTbA.html
-					key = siteurl[-28:-17]
+					swf = "http://www.tudou.com/a/%s/v.swf" % url[-28:-5]
 				elif siteurl=="iqiyi.com":
 					#http://www.iqiyi.com/dianshiju/20130628/7459ad8ec9562fc9.html
 					html = self.get_by_curl(url)
 					#extract drama_id
-					key = self.regex_extract(pattern_iqiyi, html, 1)  + url[21:]
+					swf = "http://player.video.qiyi.com/%s/%s.swf" % (self.regex_extract(self.pattern_iqiyi, html, 1), url[21:-5])
 				elif siteurl=="letv.com":
 					#http://www.letv.com/ptv/vplay/1996316.html
-					key = siteurl[-12:-5]
+					swf = "id=%s" % url[-12:-5]
 				elif siteurl=="ku6.com":
 					#http://player.ku6.com/refer/PSB0bt6sdmb7UB6xNZsNVg../v.swf 
-					key = siteurl[-29:-5]				
+					swf = "vid=%s" % url[-29:-5]				
 				elif siteurl=="qq.com":
-					#http://v.qq.com/cover/x/xgnnne5is86cqh2/c0012bs0bij.html
-					key = siteurl[-16:-5]
+					#http://v.qq.com/cover/x/xgnnne5is86cqh2/c0012bs0bij.html?ptag=baidu.video.tv
+					swf = "http://static.video.qq.com/TPout.swf?vid=%s&auto=1" % url[-36:-25]
 				elif siteurl=="sohu.com":
 					#http://tv.sohu.com/20130624/n379618347.shtml
 					html = self.get_by_curl(url)
-					key = self.regex_extract(pattern_sohu, html, 1) 
+					swf = "http://share.vrs.sohu.com/%s/v.swf&autoplay=false" % self.regex_extract(self.pattern_sohu, html, 1) 
 				elif siteurl=="pps.tv":
-					#http://v.pps.tv/play_369GGU.html
-					key = siteurl[-11:-5]
-				elif siteurl=="pptv.com":
+					#http://v.pps.tv/play_369GGU.html#frombaidu
+					swf = "http://player.pps.tv/player/sid/%s/v.swf" % url[21:27]
+				#elif siteurl=="pptv.com":
 					#http://v.pptv.com/show/CHvpZ881peNGxCw.html
-					html = self.get_by_curl(url)
-					key = self.regex_extract(pattern_pptv, html, 1)
+				#	html = self.get_by_curl(url)
+				#	swf = "pid=%s" % self.regex_extract(self.pattern_pptv, html, 1)
 				elif siteurl=="56.com":
 					#http://www.56.com/u28/v_OTE4MzcxNjk.html
-					key = siteurl[-16, -5]
+					swf = "http://player.56.com/v_%s.swf" % url[-16:-5]
 				elif siteurl=="wasu.cn":
 					html = self.get_by_curl(url)
-					key = self.regex_extract(pattern_wasu, html, 1)
+					swf = "http://play.wasu.cn/%s.swf" % self.regex_extract(self.pattern_wasu, html, 1)
 				#elif siteurl=="funshion.com":
 				#elif siteurl=="m1905.com":
 				#elif siteurl=="kankan.com":
 					#http://vod.kankan.com/v/70/70469/318343.shtml
-
-	def regex_extract(pattern, string, index)				
+				site_epi[epi]=swf
+				print site_epi[epi] 
+				playparam[siteurl]=site_epi
+			json.dump(playparam, open(self.full_path("playparam", id), "w"))
+	
+	def regex_extract(self, pattern, string, index):
 		items = pattern.finditer(string)
 		mat = ""
 		for item in items:
@@ -284,7 +293,7 @@ class TvplaySpider(VideoSpider)	:
 	def full_path(self, name, id)	:
 		path = "%s/%s/%s" % (self.save_path, name, id)
 		dirname = os.path.dirname(path)
-		if  not os.path.exists(dirname)
+		if  not os.path.exists(dirname):
 			os.mkdir(dirname)
 		return path
 			
@@ -296,10 +305,10 @@ class CartoonSpider(VideoSpider):
 
 class TvshowSpider(VideoSpider):
 '''
-if __name__ == "__main__" :
 
-	
-	if (len(sys.argv)!=3):
+def run(argv) :
+
+	if (len(argv)!=3):
 		print "usage: python spider.py spider.conf [crawler|update]"
 	else: 
 		#init logger
@@ -311,7 +320,7 @@ if __name__ == "__main__" :
 		logger.setLevel(logging.NOTSET)
 		#process argv
 		parser = ConfigParser.ConfigParser()
-		parser.read(sys.argv[1])
+		parser.read(argv[1])
 		spider_name=parser.get("crawler", "name")
 		start = parser.get("crawler","start")
 		area = parser.get("crawler","area")
@@ -331,7 +340,13 @@ if __name__ == "__main__" :
 			spider = TvshowSpider(logger, st, ar)
 
 		if spider:
-			if (sys.argv[2]=="update"):
+			if (argv[2]=="update"):
 				spider.update(scan_pages)
-			elif (sys.argv[2]=="crawler"):	
+			elif (argv[2]=="crawler"):	
 				spider.crawler(st, ar)
+			elif (argv[2]=="test"):
+				spider.get_play_site(18691, 
+					json.load(open(spider.full_path("playurl", 18691))))
+
+if __name__ == "__main__" :
+	run(sys.argv)	
