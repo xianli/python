@@ -22,19 +22,22 @@ class VideoSpider() :
 			
 		self.interval=int(parser.get("crawler", "interval"))
 		self.interval_on_error=int(parser.get("crawler", "interval_on_error"))
+		self.interval_dump_record = int(parser.get("crawler","interval_dump_record"))
 		self.retries=int(parser.get("crawler","retries"))
 		self.root_data_path=parser.get("data", "root_path")
-		self.debug= True if parser.get("crawler","debug")==1 else False
-		print self.debug
+		
+		self.debug= True if int(parser.get("crawler","debug"))==1 else False
+		
 
 	def get_by_curl(self, url , save=None):
 		if self.debug:
-			print url 
 			sys.stdin.readline()
+		if not self.debug:
+			time.sleep(self.interval)
 		failcount=0
 		while (failcount<self.retries):
 			try:
-				self.logger.info("get "+url)
+				self.logger.info("%s==>%s" % (url,save))
 				c=pycurl.Curl()
 				c.setopt(c.ENCODING, 'gzip,deflate,sdch')
 				c.setopt(c.REFERER, "http://video.baidu.com")
@@ -64,10 +67,9 @@ class VideoSpider() :
 		failcount=0
 		while (failcount<self.retries):
 			if self.debug:
-				print imageurl 
 				sys.stdin.readline()
 			try:
-				self.logger.info("get "+url)
+				self.logger.info(imageurl+"==>"+savename)
 				c=pycurl.Curl()
 				c.setopt(c.HTTPHEADER, ["Accept: text/html;q=0.9,*/*;q=0.8",
 						"Accept-Language: zh-cn,zh;q=0.8,en-us;q=0.5,en;q=0.3",
@@ -81,6 +83,7 @@ class VideoSpider() :
 				c.perform()
 				c.close()	
 				f.close()
+				return True
 			except Exception as e:
 				self.logger.error(e)
 				traceback.print_exc()
@@ -101,58 +104,54 @@ class VideoSpider() :
 		f.write(content)
 		f.close()
 
-	def crawler(self):
-		pass
-
-	def udpate(self):
-		pass
-
-class TvplaySpider(VideoSpider)	:
-
-	def __init__(self, logger, start, area):
-		VideoSpider.__init__(self, logger)	
-		self.root_page={"page":"http://video.baidu.com/commonapi/tvplay2level/?order=pubtime&start=%s&area=%s&pn=%s", "update_page":"http://video.baidu.com/commonapi/tvplay2level/?order=pubtime&pn=%s"}
-		self.second_pages={"episode":"http://video.baidu.com/tv_intro/?dtype=tvEpisodeIntro&service=json&id=%s","playurl":"http://video.baidu.com/tv_intro/?dtype=tvPlayUrl&service=json&id=%s", "recommend":"http://video.baidu.com/tv_intro/?dtype=tvCombine&service=json&id=%s","periphery":"http://video.baidu.com/tv_intro/?dtype=tvPeriphery&service=json&id=%s"}
-		self.record_file=self.root_data_path+"/tvplay.rec"
-		self.save_path=self.root_data_path+"/tvplayindex"
-		self.end=112
-		
-		self.pattern_intro=re.compile(r"<input type=\"hidden\" value=\"(.*?)\" name=\"longIntro\"/>")
-		self.pattern_iqiyi=re.compile(r"data-drama-vid=\"(.*?)\"")
-		self.pattern_sohu=re.compile(r"vid=\"(\d+)\"")
-		self.pattern_pptv=re.compile(r"pid/(\d*?).js")				
-		self.pattern_wasu=re.compile(r"<embed src=\"http://play.wasu.cn/(.*?).swf\"")
-
-		#read record file 	
-		if os.path.exists(self.record_file):
-			frec=open(self.record_file)
-			self.rec=json.load(frec)
-			frec.close()
-		else:
-			self.rec=json.loads("{\"current_page\":1}")
-			json.dump(self.rec, open(self.record_file,"w"))
-
 	def crawler(self, start, area):
-		'''crawler the all videos at the begining'''
-		current=int(self.rec["current_page"])
+		'''crawler all videos at the begining'''
 	
 		count=0
-		for s in start :
-			for a in area:
-				 for i in range (current, self.end):
-						url = self.root_page["page"] % (s,a,i)
-						save = self.full_path("page", str("%s_%s_%s"%(s, a, i)))
-						content = self.get_by_curl(url, save)
-						video_json = json.loads(content)
-						video_num = video_json["videoshow"]["video_num"]
-						for j in range(1, video_num):
-							video = video_json["videoshow"]["videos"][j]
-							self.download_video(video)
-							self.rec["current_page"]=i
-							#save record file 
-							count = count+1
-							if (count == 50):
-								json.dump(self.rec, open(self.record_file, "w"))
+		#restore form previous crawler with parameter area, start
+		si = int(self.rec["start"]) 
+		ai = int(self.rec["area"])
+		#for s in start :
+		#	if self.rec["start"] != "" and s != self.rec["start"]:
+		#		si = si + 1
+		#		continue
+		#	for a in area:
+		#		if self.rec["area"] != "" and a != self.rec["area"]:
+		#			ai = ai + 1
+		#			continue
+		current = self.rec["current_page"]
+		while (si<len(start)):
+			s = start[si]
+			self.rec["start"]=si
+			while (ai<len(area)):
+				a=area[ai]
+				self.rec["area"]=ai
+				i = current	
+				last_confidence=1
+				while True:
+					url = self.root_page["page"] % (s,a,i)
+					save = self.full_path("page", str("%s_%s_%s"%(s, a, i)))
+					content = self.get_by_curl(url, save)
+					video_json = json.loads(content)
+					if len(video_json["videoshow"])==0:
+						last_confidence = last_confidence + 1
+						if last_confidence==3:
+							self.logger.info("try last page 3 times for %s, %s, %s" %(s, a, i))
+							break		
+						else:
+							continue
+					video_num = video_json["videoshow"]["video_num"]
+					for j in range(1, video_num):
+						video = video_json["videoshow"]["videos"][j]
+						self.download_video(video)
+						self.rec["current_page"]=i
+						#save record file 
+						count = count+1
+						if (count == self.interval_dump_record):
+							json.dump(self.rec, open(self.record_file, "w"))
+					i = i + 1
+				ai = ai + 1
+			si = si + 1
 
 						
 	def update(self, check_pages):
@@ -166,45 +165,85 @@ class TvplaySpider(VideoSpider)	:
 			for j in range(1, video_num):
 				video = video_json["videoshow"]["videos"][j]
 				video_id = video["id"]
-				download_video(video)
+				download_video(video )
 				#dump the new video json object
 				if video_id not in self.rec.keys():
 					json.dump(video, open(fullpath("update_page", video_id)), "w")
 
+	
+	def regex_extract(self, pattern, string, index):
+		items = pattern.finditer(string)
+		mat = ""
+		for item in items:
+			mat = item.group(index)
+		return mat	
+
+	def full_path(self, name, id)	:
+		path = "%s/%s/%s" % (self.save_path, name, id)
+		dirname = os.path.dirname(path)
+		if  not os.path.exists(dirname):
+			os.mkdir(dirname)
+		return path
+
+class TvplaySpider(VideoSpider)	:
+
+	def __init__(self, logger, start, area):
+		VideoSpider.__init__(self, logger)	
+		self.root_page={"page":"http://video.baidu.com/commonapi/tvplay2level/?order=pubtime&start=%s&area=%s&pn=%s", "update_page":"http://video.baidu.com/commonapi/tvplay2level/?order=pubtime&pn=%s"}
+		self.second_pages={"episode":"http://video.baidu.com/tv_intro/?dtype=tvEpisodeIntro&service=json&id=%s","playurl":"http://video.baidu.com/tv_intro/?dtype=tvPlayUrl&service=json&id=%s", "recommend":"http://video.baidu.com/tv_intro/?dtype=tvCombine&service=json&id=%s","periphery":"http://video.baidu.com/tv_intro/?dtype=tvPeriphery&service=json&id=%s"}
+		self.record_file=self.root_data_path+"/tvplay.rec"
+		self.save_path=self.root_data_path+"/tvplayindex"
+		
+		self.pattern_intro=re.compile(r"<input type=\"hidden\" value=\"(.*?)\" name=\"longIntro\"/>")
+		self.pattern_iqiyi=re.compile(r"data-drama-vid=\"(.*?)\"")
+		self.pattern_sohu=re.compile(r"vid=\"(\d+)\"")
+		#self.pattern_pptv=re.compile(r"pid/(\d*?).js")				
+		self.pattern_wasu=re.compile(r"<embed src=\"http://play.wasu.cn/(.*?).swf\"")
+
+		#read record file 	
+		if os.path.exists(self.record_file):
+			frec=open(self.record_file)
+			self.rec=json.load(frec)
+			frec.close()
+		else:
+			self.rec=json.loads("{\"current_page\":1, \"start\":\"\", \"area\":\"\"}")
+			json.dump(self.rec, open(self.record_file,"w"))
 						
+
 	def download_video(self,video):
 			try :
 				video_id = video["id"]
 				big_image_url = video["imgh_url"]
 				small_image_url = video["imgv_url"]
 				detail_url = video["url"]
-				epi=0
-				m = re.match(r".*(\d+).*",  video["update"])
+				epi_num=0
+				m = re.match(r".*?(\d+).*?",  video["update"])
 				if m:
 					epi_num=m.group(1)
+					self.logger.info("title: %s, episodes: %s" % (video["title"], str(epi_num)))
 				to_run = False
 				if video_id not in self.rec.keys():	
 					to_run = True
-				elif int(self.rec[video_id][episodes]) < epi_num:
+				elif int(self.rec[video_id]["episodes"]) < epi_num:
 					#compare the episodes num 
 					to_run = True 
-
+				self.logger.info("to run:" + str(to_run))
 				if to_run:
 					# download required information 
-					self.get_video_intro(detail_url)
+					self.get_tv_intro(video_id,detail_url)
 					self.download_image(small_image_url, self.full_path("image_big", video_id))
 					self.download_image(big_image_url, self.full_path("image_small", video_id))
-					playurl=self.get_video_part(video_id)
+					playurl=self.get_tv_parts(video_id)
 					self.get_play_site(video_id, json.loads(playurl))
 					#all are downloaded, add it to old list 
-					self.rec[video_id]="{page:%s, episodes:%s}" % (i, epi_num)
+					self.rec[video_id]=epi_num
 					
 			except Exception as e:
 				json.dump(self.rec, open(self.record_file, "w"))
 				traceback.print_exc()
 				self.logger.error(e)	
 	
-	def get_video_part(self, id):
+	def get_tv_parts(self, id):
 		ret=""	
 		for (save, url) in self.second_pages.items():
 			url = url % id
@@ -213,13 +252,13 @@ class TvplaySpider(VideoSpider)	:
 				ret = html
 		return ret
 
-	def get_video_intro(self, id, url):
+	def get_tv_intro(self, id, url):
 		'''extract introduction in detail page'''
-		html=get_by_curl(url)
+		html=self.get_by_curl(url)
 		ms = self.pattern_intro.finditer(html)
 		if ms:
 			for m in ms:
-				introduction=ms.group(1)
+				introduction=m.group(1)
 				self.write2file(self.full_path("intro", id), introduction)
 		
 
@@ -279,32 +318,37 @@ class TvplaySpider(VideoSpider)	:
 				#elif siteurl=="kankan.com":
 					#http://vod.kankan.com/v/70/70469/318343.shtml
 				site_epi[epi]=swf
-				print site_epi[epi] 
 				playparam[siteurl]=site_epi
 			json.dump(playparam, open(self.full_path("playparam", id), "w"))
 	
-	def regex_extract(self, pattern, string, index):
-		items = pattern.finditer(string)
-		mat = ""
-		for item in items:
-			mat = item.group(index)
-		return mat	
-
-	def full_path(self, name, id)	:
-		path = "%s/%s/%s" % (self.save_path, name, id)
-		dirname = os.path.dirname(path)
-		if  not os.path.exists(dirname):
-			os.mkdir(dirname)
-		return path
 			
 
-'''
+
 class MovieSpider(VideoSpider):
+	def __init__(self, logger, start, area):
+		VideoSpider.__init__(self, logger)	
+		self.root_page={"page":"http://video.baidu.com/commonapi/movie2level/?&order=pubtime&start=%s&area=%s&pn=%s", "update_page":"http://video.baidu.com/commonapi/movie2level/?order=pubtime&pn=%s"}
+		self.second_pages={"comment":"http://video.baidu.com/movie_intro/?dtype=commentCombine&service=json&id=%s","recommend":"http://video.baidu.com/movie_intro/?dtype=movieCombine&service=json&id=%s","periphery":"http://video.baidu.com/movie_intro/?dtype=periphery&service=json&id=%s","playurl":"http://video.baidu.com/movie_intro/?dtype=playUrl&service=json&id=%s"}
+		self.record_file=self.root_data_path+"/movie.rec"
+		self.save_path=self.root_data_path+"/movieindex"
+		self.end=112
+		
+		self.pattern_intro=re.compile(r"<input type=\"hidden\" value=\"(.*?)\" name=\"longIntro\"/>")
+		self.pattern_iqiyi=re.compile(r"data-drama-vid=\"(.*?)\"")
+		self.pattern_sohu=re.compile(r"vid=\"(\d+)\"")
+		#self.pattern_pptv=re.compile(r"pid/(\d*?).js")				
+		self.pattern_wasu=re.compile(r"<embed src=\"http://play.wasu.cn/(.*?).swf\"")
 
-class CartoonSpider(VideoSpider):
+		#read record file 	
+		if os.path.exists(self.record_file):
+			frec=open(self.record_file)
+			self.rec=json.load(frec)
+			frec.close()
+		else:
+			self.rec=json.loads("{\"current_page\":1}")
+			json.dump(self.rec, open(self.record_file,"w"))
 
-class TvshowSpider(VideoSpider):
-'''
+
 
 def run(argv) :
 
@@ -317,6 +361,8 @@ def run(argv) :
 		logformat = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
 		loghandler.setFormatter(logformat)
 		logger.addHandler(loghandler)
+
+	#	logger.addHandler(logging.StreamHandler())
 		logger.setLevel(logging.NOTSET)
 		#process argv
 		parser = ConfigParser.ConfigParser()
@@ -345,8 +391,10 @@ def run(argv) :
 			elif (argv[2]=="crawler"):	
 				spider.crawler(st, ar)
 			elif (argv[2]=="test"):
-				spider.get_play_site(18691, 
-					json.load(open(spider.full_path("playurl", 18691))))
+				json_video=json.load(open(spider.full_path("page", 1)))
+				for i in range(1,18):
+					spider.download_video( 
+					json_video["videoshow"]["videos"][i])
 
 if __name__ == "__main__" :
 	run(sys.argv)	
